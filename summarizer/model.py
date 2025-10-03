@@ -33,7 +33,7 @@ def summarize(text: str, max_new_tokens: int = 120) -> list[str]:
     chunks = chunk_text(text)
     summaries = []
     for chunk in chunks:
-        prompt = f"summarize: {text}\nКратко, 2–3 предложения."
+        prompt = f"summarize: {chunk}\nКратко, 2–3 предложения."
         inputs = tokenizer(
             prompt,
             return_tensors="pt",
