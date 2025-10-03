@@ -1,10 +1,9 @@
-# summarize_ru.py
 from transformers import AutoTokenizer, AutoModelForSeq2SeqLM
 import torch
 import re
 
 
-MODEL_NAME = "IlyaGusev/rut5_base_sum_gazeta"
+MODEL_NAME = "IlyaGusev/rut5_base_sum_gazeta"  # ~ 2 GB
 
 device = (
     "mps" if torch.backends.mps.is_available()
@@ -20,7 +19,7 @@ model.eval()
 def summarize(text: str, max_new_tokens: int = 120) -> str:
     """
     Краткое резюме текста на 2–3 предложения.
-    Модель — ruT5, обученная на суммаризацию.
+    Модель — ruT5.
     """
     prompt = f"summarize: {text}\nКратко, 2–3 предложения."
     inputs = tokenizer(
@@ -48,6 +47,7 @@ def summarize(text: str, max_new_tokens: int = 120) -> str:
     summary_3 = " ".join(sentences[:3]).strip()
     return summary_3
 
+# Input prompt here
 article = """
 Сорта Селекционерами выведены самые различные по форме, размерам и цвету сорта баклажанов. Наиболее распространены
 мелкие и цветные формы на дальнем востоке. Их форма варьирует от цилиндрической и грушевидной до почти шарообразной.
