@@ -3,13 +3,14 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>Мои RSS-ленты — словарь новостей</title>
+  <title>Новости из RSS — краткие карточки</title>
   <style>
     :root { color-scheme: light dark; }
     body { font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif; margin: 0; }
     .wrap { max-width: 880px; margin: 24px auto; padding: 16px; }
     h1 { margin: 0 0 8px 0; font-size: 1.6rem; }
     p.hint { margin: 0 0 16px 0; color: #888; }
+
     textarea, input[type="number"], input[type="text"] {
       width: 100%; box-sizing: border-box; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
       padding: 10px; border-radius: 10px; border: 1px solid #6663;
@@ -18,25 +19,48 @@
     textarea { min-height: 120px; }
     .row { display: flex; gap: 12px; margin-top: 12px; flex-wrap: wrap; }
     .row > * { flex: 1 1 220px; }
+
+    .actions { display: flex; gap: 10px; margin-top: 12px; flex-wrap: wrap; }
     button {
       border: none; padding: 10px 14px; border-radius: 10px; cursor: pointer; font-weight: 600;
       background: #4f46e5; color: #fff; box-shadow: 0 6px 20px #4f46e53a;
     }
+    button[disabled] { opacity: .6; cursor: not-allowed; }
+
+    .out { margin-top: 14px; }
+    .outbox {
+      white-space: normal; word-break: break-word;
+      border: 1px solid #6663; border-radius: 10px; padding: 10px; min-height: 140px;
+    }
     .footer { margin-top: 18px; color:#888 }
-    .muted { color:#888 }
-    .format { display:flex; gap:16px; align-items:center; margin-top:6px }
-    .out { margin-top:14px }
-    .tabs { display:flex; gap:8px; margin-top:8px }
-    .tabs button { background:#374151; }
-    .tabs button.sel { background:#2563eb; }
-    .outbox { white-space: pre-wrap; word-break: break-word; border:1px solid #6663; border-radius:10px; padding:10px; min-height: 120px; }
     code { background: #6661; padding: 2px 6px; border-radius: 6px; }
+
+    /* Встроенные стили карточек (чтоб выглядело красиво из коробки) */
+    .news-group{margin-top:18px}
+    .news-source{font-weight:700;margin:0 0 8px 0}
+    .card{border:1px solid #6663;border-radius:12px;padding:12px;margin:10px 0;box-shadow:0 4px 14px #0001}
+    .card .head{display:flex;gap:12px;align-items:baseline;flex-wrap:wrap}
+    .card a.title{font-weight:700;text-decoration:none}
+    .card .date{opacity:.7;font-size:.9em}
+    .card .sum{margin-top:8px;line-height:1.5;white-space:pre-wrap}
+
+    /* Индикатор загрузки */
+    .loading {
+      display: inline-flex; align-items: center; gap: 10px; color: #777;
+      padding: 10px; border: 1px dashed #6664; border-radius: 10px; background: #00000006;
+    }
+    .spinner {
+      width: 18px; height: 18px; border-radius: 50%;
+      border: 3px solid #9aa0a6; border-top-color: #4f46e5;
+      animation: spin 0.9s linear infinite;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
   </style>
 </head>
 <body>
   <div class="wrap">
-    <h1>Мои RSS-ленты → словарь новостей</h1>
-    <p class="hint">Вставьте RSS-ссылки (по одной в строке или через запятую). В формате «HTML» получатся карточки: заголовок-ссылка, дата и краткое резюме.</p>
+    <h1>Новости из RSS — краткие карточки</h1>
+    <p class="hint">Вставьте RSS-ссылки (по одной в строке или через запятую). Будут показаны заголовок-ссылка, дата и краткое резюме (генерация).</p>
 
     <textarea id="rssInput" placeholder="https://lenta.ru/rss/news
 https://ria.ru/export/rss2/archive/index.xml">https://lenta.ru/rss/news
@@ -44,7 +68,7 @@ https://ria.ru/export/rss2/archive/index.xml</textarea>
 
     <div class="row">
       <div>
-        <label>Сколько брать статей в каждом из каналов:
+        <label>Сколько брать на ленту:
           <input id="latestN" type="number" min="1" max="300" value="100" />
         </label>
       </div>
@@ -55,27 +79,41 @@ https://ria.ru/export/rss2/archive/index.xml</textarea>
       </div>
     </div>
 
-    <div class="format">
-      <strong>Формат ответа:</strong>
-      <label><input type="radio" name="fmt" value="json"> JSON</label>
-      <label><input type="radio" name="fmt" value="text"> Текст</label>
-      <label><input type="radio" name="fmt" value="html" checked> HTML</label>
-      <button id="btnLoad" onclick="fetchRSS()">Загрузить</button>
-      <button id="btnCopy" onclick="copyOut()">Копировать</button>
+    <div class="actions">
+      <button id="btnLoad">Загрузить</button>
+      <button id="btnCopy">Копировать</button>
+      <button id="btnClear" style="background:#6b7280">Очистить</button>
     </div>
 
     <div class="out">
-      <div id="outBox" class="outbox" placeholder="Здесь появится ответ..."></div>
+      <div id="outBox" class="outbox" placeholder="Здесь появятся статьи..."></div>
     </div>
 
     <div class="footer">
         <br><br>❄️🌵 This project is created by BMSTU Students
     </div>
   </div>
-
   <script>
-    function currentFormat() {
-      return document.querySelector('input[name="fmt"]:checked').value;
+    // для отмены предыдущего запроса (если нажали "Загрузить" повторно)
+    let currentController = null;
+
+    function setBusy(busy) {
+      const controls = [document.getElementById('btnLoad'), document.getElementById('btnCopy'), document.getElementById('btnClear'),
+                        document.getElementById('rssInput'), document.getElementById('latestN'), document.getElementById('keywords')];
+      controls.forEach(el => el.disabled = !!busy);
+
+      const box = document.getElementById('outBox');
+      if (busy) {
+        box.setAttribute('aria-busy', 'true');
+        box.innerHTML = `
+          <div class="loading">
+            <div class="spinner" aria-hidden="true"></div>
+            <div>Готовим статьи для Вас...<br>Скачиваем и сжимаем текст</div>
+          </div>
+        `;
+      } else {
+        box.removeAttribute('aria-busy');
+      }
     }
 
     async function fetchRSS() {
@@ -86,31 +124,37 @@ https://ria.ru/export/rss2/archive/index.xml</textarea>
         .map(s => s.trim())
         .filter(Boolean);
 
-      const fmt = currentFormat();
-      const url = fmt === 'text' ? '/api/rss_text'
-                : fmt === 'html' ? '/api/rss_html'
-                : '/api/rss';
+      // отменим предыдущий запрос, если есть
+      if (currentController) currentController.abort();
+      currentController = new AbortController();
 
-      const res = await fetch(url, {
-        method: 'POST',
-        headers: {'Content-Type':'application/json'},
-        body: JSON.stringify({ urls: input, latest_n: latestN, keywords })
-      });
-
+      setBusy(true);
       const box = document.getElementById('outBox');
 
-      if (fmt === 'html') {
+      try {
+        const res = await fetch('/api/rss_html', {
+          method: 'POST',
+          headers: {'Content-Type':'application/json'},
+          body: JSON.stringify({ urls: input, latest_n: latestN, keywords }),
+          signal: currentController.signal
+        });
+
         const html = await res.text();
-        box.innerHTML = html;           // карточки из бэка
-        window.NEWS_DICT = undefined;
-      } else if (fmt === 'text') {
-        const text = await res.text();
-        box.textContent = text;         // plain text
-        window.NEWS_DICT = undefined;
-      } else {
-        const data = await res.json();
-        window.NEWS_DICT = data.news || {};
-        box.textContent = JSON.stringify(data, null, 2);
+        box.innerHTML = html || `<div class="muted">Пусто</div>`;
+        // автопрокрутка к началу результатов (если блок ниже экрана)
+        box.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      } catch (err) {
+        if (err?.name === 'AbortError') {
+          // запрос отменен — тихо выходим
+        } else {
+          box.innerHTML = `<div class="loading" style="border-color:#e11d48;color:#e11d48">
+            <div class="spinner" style="border-color:#fca5a5;border-top-color:#e11d48"></div>
+            <div>Ошибка загрузки: ${String(err)}</div>
+          </div>`;
+        }
+      } finally {
+        setBusy(false);
+        currentController = null;
       }
     }
 
@@ -125,14 +169,24 @@ https://ria.ru/export/rss2/archive/index.xml</textarea>
       sel.removeAllRanges();
     }
 
-    // На всякий: если хочешь менять дефолты динамически
-    window.addEventListener('DOMContentLoaded', () => {
-      // можно подменить значения отсюда, если потребуется
-      // document.getElementById('latestN').value = 100;
-      // document.getElementById('keywords').value = "Россия, экономика, технологии";
-      // document.getElementById('rssInput').value = `https://lenta.ru/rss/news
-      // https://ria.ru/export/rss2/archive/index.xml`;
+    function clearOut() {
+      document.getElementById('outBox').innerHTML = '';
+    }
+
+    // события
+    document.getElementById('btnLoad').addEventListener('click', fetchRSS);
+    document.getElementById('btnCopy').addEventListener('click', copyOut);
+    document.getElementById('btnClear').addEventListener('click', clearOut);
+
+    // Ctrl/Cmd+Enter — загрузить
+    window.addEventListener('keydown', (e) => {
+      if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
+        fetchRSS();
+      }
     });
+
+    // можно автозапускать при открытии страницы (если надо)
+    // window.addEventListener('DOMContentLoaded', () => fetchRSS());
   </script>
 </body>
 </html>

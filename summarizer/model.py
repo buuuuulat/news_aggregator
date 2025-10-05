@@ -131,9 +131,3 @@ def summarize_many(texts: List[str], max_new_tokens: int = 120, batch_size: int 
         out[i] = "\n".join([p for p in acc[i] if p]).strip()
 
     return out
-
-
-# Пример запуска
-if __name__ == "__main__":
-    article = """Toyota Camry для россиян обойдётся ..."""
-    print(summarize(article))

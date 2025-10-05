@@ -29,9 +29,9 @@ SUMM_DIR = (APP_DIR / ".." / "summarizer").resolve()
 if str(SUMM_DIR) not in sys.path:
     sys.path.append(str(SUMM_DIR))
 try:
-    from model import summarize as ru_summarize  # type: ignore
+    from model import summarize_many as ru_summarize_many  # type: ignore
 except Exception:
-    ru_summarize = None  # gracefully degrade
+    ru_summarize_many = None
 
 
 # ---------------------------
