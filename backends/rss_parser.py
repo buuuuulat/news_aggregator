@@ -49,7 +49,7 @@ def parse_websites(websites: List[str], keywords: List[str], latest_n: int = 100
     return parsed
 
 parsed1 = parse_websites(["http://lenta.ru/rss/news", "https://ria.ru/export/rss2/archive/index.xml"],
-                     ["россия"], 2)
+                     ["россия", "наука", "экономика"], 10)
 
-print(parsed1)
+print(len(parsed1["http://lenta.ru/rss/news"]))
 
