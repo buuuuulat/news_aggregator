@@ -1,66 +1,119 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="ru">
 <head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width,initial-scale=1.0" />
-  <title>Newwwwws</title>
-  <link rel="stylesheet" href="/static/style.css" />
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Мои RSS-ленты — словарь новостей</title>
   <style>
-    body { font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif; margin: 24px; }
-    form { margin-bottom: 20px; }
-    .news-item { padding: 10px 0; border-bottom: 1px solid #eee; }
-    .meta { font-size: 12px; color: #666; }
-    .chips { display: inline-flex; gap: 8px; flex-wrap: wrap; margin-top: 8px; }
-    .chip { font-size: 12px; padding: 4px 8px; border: 1px solid #ddd; border-radius: 999px; }
-    .empty { color: #999; }
+    :root { color-scheme: light dark; }
+    body { font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif; margin: 0; }
+    .wrap { max-width: 880px; margin: 24px auto; padding: 16px; }
+    h1 { margin: 0 0 8px 0; font-size: 1.6rem; }
+    p.hint { margin: 0 0 16px 0; color: #888; }
+    textarea, input[type="number"], input[type="text"] {
+      width: 100%; box-sizing: border-box; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+      padding: 10px; border-radius: 10px; border: 1px solid #6663;
+      background: transparent; outline: none;
+    }
+    textarea { min-height: 120px; }
+    .row { display: flex; gap: 12px; margin-top: 12px; flex-wrap: wrap; }
+    .row > * { flex: 1 1 220px; }
+    button {
+      border: none; padding: 10px 14px; border-radius: 10px; cursor: pointer; font-weight: 600;
+      background: #4f46e5; color: #fff; box-shadow: 0 6px 20px #4f46e53a;
+    }
+    .footer { margin-top: 18px; color:#888 }
+    .muted { color:#888 }
+    .format { display:flex; gap:16px; align-items:center; margin-top:6px }
+    .out { margin-top:14px }
+    .tabs { display:flex; gap:8px; margin-top:8px }
+    .tabs button { background:#374151; }
+    .tabs button.sel { background:#2563eb; }
+    pre { white-space: pre-wrap; word-break: break-word; border:1px solid #6663; border-radius:10px; padding:10px; }
   </style>
 </head>
 <body>
-  <h1>Новости по выбранным источникам</h1>
+  <div class="wrap">
+    <h1>Мои RSS-ленты → словарь новостей</h1>
+    <p class="hint">Вставьте RSS-ссылки (по одной в строке или через запятую). Выберите формат «Текст», чтобы получить словарь текстом.</p>
 
-  <form action="/" method="post">
-    <p><strong>Выберите источники:</strong></p>
-    {% if sources %}
-      {% for src in sources %}
-        <div>
-          <input
-            type="checkbox"
-            id="src-{{ src }}"
-            name="websites"
-            value="{{ src }}"
-            {% if src in selected %}checked{% endif %}
-          />
-          <label for="src-{{ src }}">{{ src }}</label>
-        </div>
-      {% endfor %}
-    {% else %}
-      <p class="empty">Источники не найдены. Проверьте файл <code>data/news.jsonl</code>.</p>
-    {% endif %}
-    <br />
-    <button type="submit">Показать новости</button>
-  </form>
+    <textarea id="rssInput" placeholder="https://lenta.ru/rss/news
+https://ria.ru/export/rss2/archive/index.xml"></textarea>
 
-  {% if selected %}
-    <div class="chips">
-      <div class="chip">Выбрано: {{ selected | join(", ") }}</div>
-    </div>
-  {% endif %}
-
-  <hr />
-
-  {% if items and items|length > 0 %}
-    <h2>Лента</h2>
-    {% for it in items %}
-      <div class="news-item">
-        <a href="{{ it.url }}" target="_blank" rel="noopener noreferrer">{{ it.title }}</a>
-        <div class="meta">
-          Источник: {{ it.source }} |
-          Опубликовано: {{ (it._dt or "").strftime("%Y-%m-%d %H:%M") if it._dt else "" }}
-        </div>
+    <div class="row">
+      <div>
+        <label>Сколько брать на ленту:
+          <input id="latestN" type="number" min="1" max="100" value="10" />
+        </label>
       </div>
-    {% endfor %}
-  {% else %}
-    <p class="empty">Выберите источники и нажмите «Показать новости», чтобы увидеть ленту.</p>
-  {% endif %}
+      <div>
+        <label>Ключевые слова (опц., через запятую):
+          <input id="keywords" type="text" placeholder="economy, tech" />
+        </label>
+      </div>
+    </div>
+
+    <div class="format">
+      <strong>Формат ответа:</strong>
+      <label><input type="radio" name="fmt" value="json" checked> JSON</label>
+      <label><input type="radio" name="fmt" value="text"> Текст</label>
+      <button id="btnLoad" onclick="fetchRSS()">Загрузить</button>
+      <button id="btnCopy" onclick="copyOut()">Копировать</button>
+    </div>
+
+    <div class="out">
+      <pre id="outBox" placeholder="Здесь появится ответ..."></pre>
+    </div>
+
+    <div class="footer">
+      Подсказка: JSON-результат доступен в <code>window.NEWS_DICT</code>. Для «Текст» — просто копируй из блока выше.
+    </div>
+  </div>
+
+  <script>
+    function currentFormat() {
+      return document.querySelector('input[name="fmt"]:checked').value;
+    }
+
+    async function fetchRSS() {
+      const input = document.getElementById('rssInput').value;
+      const latestN = Number(document.getElementById('latestN').value) || 10;
+      const keywords = (document.getElementById('keywords').value || '')
+        .split(',')
+        .map(s => s.trim())
+        .filter(Boolean);
+
+      const fmt = currentFormat();
+      const url = fmt === 'text' ? '/api/rss_text' : '/api/rss';
+
+      const res = await fetch(url, {
+        method: 'POST',
+        headers: {'Content-Type':'application/json'},
+        body: JSON.stringify({ urls: input, latest_n: latestN, keywords })
+      });
+
+      if (fmt === 'text') {
+        const text = await res.text();
+        document.getElementById('outBox').textContent = text;
+        // для удобства: очистим глобальные данные
+        window.NEWS_DICT = undefined;
+      } else {
+        const data = await res.json();
+        window.NEWS_DICT = data.news || {};
+        document.getElementById('outBox').textContent = JSON.stringify(data, null, 2);
+      }
+    }
+
+    function copyOut() {
+      const el = document.getElementById('outBox');
+      const range = document.createRange();
+      range.selectNodeContents(el);
+      const sel = window.getSelection();
+      sel.removeAllRanges();
+      sel.addRange(range);
+      try { document.execCommand('copy'); } catch {}
+      sel.removeAllRanges();
+    }
+  </script>
 </body>
 </html>
