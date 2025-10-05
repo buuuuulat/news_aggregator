@@ -29,13 +29,14 @@
     .tabs { display:flex; gap:8px; margin-top:8px }
     .tabs button { background:#374151; }
     .tabs button.sel { background:#2563eb; }
-    pre { white-space: pre-wrap; word-break: break-word; border:1px solid #6663; border-radius:10px; padding:10px; }
+    .outbox { white-space: pre-wrap; word-break: break-word; border:1px solid #6663; border-radius:10px; padding:10px; min-height: 120px; }
+    code { background: #6661; padding: 2px 6px; border-radius: 6px; }
   </style>
 </head>
 <body>
   <div class="wrap">
     <h1>Мои RSS-ленты → словарь новостей</h1>
-    <p class="hint">Вставьте RSS-ссылки (по одной в строке или через запятую). Выберите формат «Текст», чтобы получить словарь текстом.</p>
+    <p class="hint">Вставьте RSS-ссылки (по одной в строке или через запятую). В формате «HTML» получатся карточки: заголовок-ссылка, дата и краткое резюме.</p>
 
     <textarea id="rssInput" placeholder="https://lenta.ru/rss/news
 https://ria.ru/export/rss2/archive/index.xml">https://lenta.ru/rss/news
@@ -43,31 +44,32 @@ https://ria.ru/export/rss2/archive/index.xml</textarea>
 
     <div class="row">
       <div>
-        <label>Сколько брать на ленту:
-          <input id="latestN" type="number" min="1" max="100" value="100" />
+        <label>Сколько брать статей в каждом из каналов:
+          <input id="latestN" type="number" min="1" max="300" value="100" />
         </label>
       </div>
       <div>
         <label>Ключевые слова (опц., через запятую):
-          <input id="keywords" type="text" placeholder="Экономика, наука", value="Россия, экономика, наука" />
+          <input id="keywords" type="text" value="Россия, экономика, технологии" />
         </label>
       </div>
     </div>
 
     <div class="format">
       <strong>Формат ответа:</strong>
-      <label><input type="radio" name="fmt" value="json" checked> JSON</label>
+      <label><input type="radio" name="fmt" value="json"> JSON</label>
       <label><input type="radio" name="fmt" value="text"> Текст</label>
+      <label><input type="radio" name="fmt" value="html" checked> HTML</label>
       <button id="btnLoad" onclick="fetchRSS()">Загрузить</button>
       <button id="btnCopy" onclick="copyOut()">Копировать</button>
     </div>
 
     <div class="out">
-      <pre id="outBox" placeholder="Здесь появится ответ..."></pre>
+      <div id="outBox" class="outbox" placeholder="Здесь появится ответ..."></div>
     </div>
 
     <div class="footer">
-        <br><br>🤗
+        <br><br>❄️🌵 This project is created by BMSTU Students
     </div>
   </div>
 
@@ -78,14 +80,16 @@ https://ria.ru/export/rss2/archive/index.xml</textarea>
 
     async function fetchRSS() {
       const input = document.getElementById('rssInput').value;
-      const latestN = Number(document.getElementById('latestN').value) || 10;
+      const latestN = Number(document.getElementById('latestN').value) || 100;
       const keywords = (document.getElementById('keywords').value || '')
         .split(',')
         .map(s => s.trim())
         .filter(Boolean);
 
       const fmt = currentFormat();
-      const url = fmt === 'text' ? '/api/rss_text' : '/api/rss';
+      const url = fmt === 'text' ? '/api/rss_text'
+                : fmt === 'html' ? '/api/rss_html'
+                : '/api/rss';
 
       const res = await fetch(url, {
         method: 'POST',
@@ -93,15 +97,20 @@ https://ria.ru/export/rss2/archive/index.xml</textarea>
         body: JSON.stringify({ urls: input, latest_n: latestN, keywords })
       });
 
-      if (fmt === 'text') {
+      const box = document.getElementById('outBox');
+
+      if (fmt === 'html') {
+        const html = await res.text();
+        box.innerHTML = html;           // карточки из бэка
+        window.NEWS_DICT = undefined;
+      } else if (fmt === 'text') {
         const text = await res.text();
-        document.getElementById('outBox').textContent = text;
-        // для удобства: очистим глобальные данные
+        box.textContent = text;         // plain text
         window.NEWS_DICT = undefined;
       } else {
         const data = await res.json();
         window.NEWS_DICT = data.news || {};
-        document.getElementById('outBox').textContent = JSON.stringify(data, null, 2);
+        box.textContent = JSON.stringify(data, null, 2);
       }
     }
 
@@ -115,6 +124,15 @@ https://ria.ru/export/rss2/archive/index.xml</textarea>
       try { document.execCommand('copy'); } catch {}
       sel.removeAllRanges();
     }
+
+    // На всякий: если хочешь менять дефолты динамически
+    window.addEventListener('DOMContentLoaded', () => {
+      // можно подменить значения отсюда, если потребуется
+      // document.getElementById('latestN').value = 100;
+      // document.getElementById('keywords').value = "Россия, экономика, технологии";
+      // document.getElementById('rssInput').value = `https://lenta.ru/rss/news
+      // https://ria.ru/export/rss2/archive/index.xml`;
+    });
   </script>
 </body>
 </html>
