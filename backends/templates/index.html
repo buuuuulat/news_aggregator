@@ -35,7 +35,7 @@
     .footer { margin-top: 18px; color:#888 }
     code { background: #6661; padding: 2px 6px; border-radius: 6px; }
 
-    /* Встроенные стили карточек (чтоб выглядело красиво из коробки) */
+    /* Встроенные стили карточек */
     .news-group{margin-top:18px}
     .news-source{font-weight:700;margin:0 0 8px 0}
     .card{border:1px solid #6663;border-radius:12px;padding:12px;margin:10px 0;box-shadow:0 4px 14px #0001}
@@ -60,7 +60,7 @@
 <body>
   <div class="wrap">
     <h1>Новости из RSS — краткие карточки</h1>
-    <p class="hint">Вставьте RSS-ссылки (по одной в строке или через запятую). Будут показаны заголовок-ссылка, дата и краткое резюме (генерация).</p>
+    <p class="hint">Вставьте RSS-ссылки (по одной в строке или через запятую). Будут показаны заголовок-ссылка, дата и краткое резюме.</p>
 
     <textarea id="rssInput" placeholder="https://lenta.ru/rss/news
 https://ria.ru/export/rss2/archive/index.xml">https://lenta.ru/rss/news
@@ -90,16 +90,22 @@ https://ria.ru/export/rss2/archive/index.xml</textarea>
     </div>
 
     <div class="footer">
-        <br><br>❄️🌵 This project is created by BMSTU Students
+      Потоковая выдача (SSE) с <code>/api/rss_stream</code>: карточки приходят по мере готовности.
     </div>
   </div>
-  <script>
-    // для отмены предыдущего запроса (если нажали "Загрузить" повторно)
-    let currentController = null;
 
-    function setBusy(busy) {
-      const controls = [document.getElementById('btnLoad'), document.getElementById('btnCopy'), document.getElementById('btnClear'),
-                        document.getElementById('rssInput'), document.getElementById('latestN'), document.getElementById('keywords')];
+  <script>
+    let es = null;
+
+    function setBusy(busy, text = "Генерирую карточки: скачивание и суммаризация…") {
+      const controls = [
+        document.getElementById('btnLoad'),
+        document.getElementById('btnCopy'),
+        document.getElementById('btnClear'),
+        document.getElementById('rssInput'),
+        document.getElementById('latestN'),
+        document.getElementById('keywords'),
+      ];
       controls.forEach(el => el.disabled = !!busy);
 
       const box = document.getElementById('outBox');
@@ -108,7 +114,7 @@ https://ria.ru/export/rss2/archive/index.xml</textarea>
         box.innerHTML = `
           <div class="loading">
             <div class="spinner" aria-hidden="true"></div>
-            <div>Готовим статьи для Вас...<br>Скачиваем и сжимаем текст</div>
+            <div>${text}</div>
           </div>
         `;
       } else {
@@ -116,46 +122,113 @@ https://ria.ru/export/rss2/archive/index.xml</textarea>
       }
     }
 
-    async function fetchRSS() {
+    function buildCardHTML(item) {
+      const esc = (s) => (s ?? "").toString()
+        .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
+        .replace(/"/g, "&quot;").replace(/'/g, "&#39;");
+
+      const title = esc(item.title || "(без заголовка)");
+      const link  = esc(item.link || "");
+      const pub   = esc(item.published || "");
+      const sum   = esc(item.summary || "");
+
+      const titleHtml = link
+        ? `<a class="title" href="${link}" target="_blank" rel="noopener noreferrer">${title}</a>`
+        : `<span class="title">${title}</span>`;
+
+      return `
+        <div class="card">
+          <div class="head">
+            ${titleHtml}
+            ${pub ? `<span class="date">${pub}</span>` : ""}
+          </div>
+          <div class="sum">${sum}</div>
+        </div>
+      `;
+    }
+
+    function appendGroupIfMissing(src) {
+      const box = document.getElementById('outBox');
+      const id = `group_${btoa(unescape(encodeURIComponent(src))).replace(/=/g, "")}`;
+      if (!document.getElementById(id)) {
+        const group = document.createElement('div');
+        group.className = 'news-group';
+        group.id = id;
+        group.innerHTML = `<div class="news-source">${src}</div>`;
+        box.appendChild(group);
+      }
+      return document.getElementById(id);
+    }
+
+    function startStream() {
       const input = document.getElementById('rssInput').value;
       const latestN = Number(document.getElementById('latestN').value) || 100;
       const keywords = (document.getElementById('keywords').value || '')
-        .split(',')
-        .map(s => s.trim())
-        .filter(Boolean);
+        .split(',').map(s => s.trim()).filter(Boolean).join(',');
 
-      // отменим предыдущий запрос, если есть
-      if (currentController) currentController.abort();
-      currentController = new AbortController();
-
+      if (es) { es.close(); es = null; }
       setBusy(true);
       const box = document.getElementById('outBox');
+      box.innerHTML = ""; // очистка
 
-      try {
-        const res = await fetch('/api/rss_html', {
-          method: 'POST',
-          headers: {'Content-Type':'application/json'},
-          body: JSON.stringify({ urls: input, latest_n: latestN, keywords }),
-          signal: currentController.signal
-        });
+      const params = new URLSearchParams({
+        urls: input,          // допускаются переносы строк
+        latest_n: String(latestN),
+        keywords
+      });
+      const url = `/api/rss_stream?${params.toString()}`;
 
-        const html = await res.text();
-        box.innerHTML = html || `<div class="muted">Пусто</div>`;
-        // автопрокрутка к началу результатов (если блок ниже экрана)
-        box.scrollIntoView({ behavior: 'smooth', block: 'start' });
-      } catch (err) {
-        if (err?.name === 'AbortError') {
-          // запрос отменен — тихо выходим
+      es = new EventSource(url);
+
+      es.addEventListener('start', (e) => {
+        const data = JSON.parse(e.data);
+        const total = data.total || 0;
+        if (total === 0) {
+          box.innerHTML = `<div class="muted">Нет записей по фильтрам.</div>`;
         } else {
+          box.innerHTML = `
+            <div class="loading">
+              <div class="spinner" aria-hidden="true"></div>
+              <div>Нашли ${total} записей. Начинаю суммаризацию…</div>
+            </div>
+          `;
+        }
+      });
+
+      es.addEventListener('card', (e) => {
+        const data = JSON.parse(e.data);
+        if (box.querySelector('.loading')) box.innerHTML = "";
+
+        const group = appendGroupIfMissing(data.src || "Источник");
+        group.insertAdjacentHTML('beforeend', buildCardHTML(data));
+
+        if (data.progress) {
+          const { done, total } = data.progress;
+          document.title = `(${done}/${total}) Новости из RSS — краткие карточки`;
+        }
+      });
+
+      es.addEventListener('done', (e) => {
+        const data = JSON.parse(e.data || "{}");
+        setBusy(false);
+        if (!data.ok) {
           box.innerHTML = `<div class="loading" style="border-color:#e11d48;color:#e11d48">
             <div class="spinner" style="border-color:#fca5a5;border-top-color:#e11d48"></div>
-            <div>Ошибка загрузки: ${String(err)}</div>
+            <div>Ошибка: ${data.error || "unknown"}</div>
           </div>`;
         }
-      } finally {
-        setBusy(false);
-        currentController = null;
-      }
+        if (es) { es.close(); es = null; }
+        document.title = `Новости из RSS — краткие карточки`;
+      });
+
+      es.onerror = () => {
+        setBusy(false, "");
+        if (es) { es.close(); es = null; }
+        box.insertAdjacentHTML('beforeend', `<div class="loading" style="border-color:#e11d48;color:#e11d48">
+          <div class="spinner" style="border-color:#fca5a5;border-top-color:#e11d48"></div>
+          <div>Ошибка соединения</div>
+        </div>`);
+      };
     }
 
     function copyOut() {
@@ -173,20 +246,17 @@ https://ria.ru/export/rss2/archive/index.xml</textarea>
       document.getElementById('outBox').innerHTML = '';
     }
 
-    // события
-    document.getElementById('btnLoad').addEventListener('click', fetchRSS);
+    document.getElementById('btnLoad').addEventListener('click', startStream);
     document.getElementById('btnCopy').addEventListener('click', copyOut);
     document.getElementById('btnClear').addEventListener('click', clearOut);
 
     // Ctrl/Cmd+Enter — загрузить
     window.addEventListener('keydown', (e) => {
-      if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
-        fetchRSS();
-      }
+      if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') startStream();
     });
 
-    // можно автозапускать при открытии страницы (если надо)
-    // window.addEventListener('DOMContentLoaded', () => fetchRSS());
+    // Можно автозапустить на загрузке:
+    // window.addEventListener('DOMContentLoaded', startStream);
   </script>
 </body>
 </html>

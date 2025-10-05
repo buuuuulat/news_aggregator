@@ -1,13 +1,22 @@
+# main.py
 import os
 import sys
 import html
+import json
 from pathlib import Path
 from typing import Any, Dict, List, Tuple, Union
 
 import requests
+from concurrent.futures import ThreadPoolExecutor, as_completed
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, HTMLResponse, PlainTextResponse
+from fastapi.responses import (
+    FileResponse,
+    HTMLResponse,
+    PlainTextResponse,
+    StreamingResponse,
+)
 from pydantic import BaseModel, validator
 from urllib.parse import urlparse
 
@@ -18,7 +27,7 @@ from urllib.parse import urlparse
 APP_DIR = Path(__file__).resolve().parent
 INDEX_FILE = APP_DIR / "templates/index.html"
 
-# Import RSS parser
+# Import RSS parser (твой файл rss_parser.py, который использует feedparser)
 try:
     from rss_parser import parse_websites
 except Exception:
@@ -29,16 +38,19 @@ SUMM_DIR = (APP_DIR / ".." / "summarizer").resolve()
 if str(SUMM_DIR) not in sys.path:
     sys.path.append(str(SUMM_DIR))
 try:
-    from model import summarize_many as ru_summarize_many  # type: ignore
+    # summarize: для одного текста (совместимо с твоим API)
+    # summarize_many: батч на несколько статей сразу (ускоряет)
+    from model import summarize as ru_summarize, summarize_many as ru_summarize_many  # type: ignore
 except Exception:
-    ru_summarize_many = None
+    ru_summarize = None   # type: ignore
+    ru_summarize_many = None  # type: ignore
 
 
 # ---------------------------
 # FastAPI setup
 # ---------------------------
 
-app = FastAPI(title="News Aggregator (RSS → dict & HTML summaries)")
+app = FastAPI(title="News Aggregator (RSS → HTML summaries + SSE)")
 
 app.add_middleware(
     CORSMiddleware,
@@ -194,7 +206,7 @@ def _summarize_text(text: str) -> str:
 
 
 # ---------------------------
-# Helpers: Legacy JSON/text formatting
+# Legacy JSON/text formatting (оставим для совместимости)
 # ---------------------------
 
 def _fetch_news_dict(
@@ -241,38 +253,9 @@ def _fetch_news_dict(
 
     return ok, errors
 
-def _format_text_dict(news: Dict[str, List[Dict[str, Any]]], errors: Dict[str, str]) -> str:
-    """
-    Делает человекочитаемый «текстовый словарь».
-    """
-    lines: List[str] = []
-    if news:
-        for url, items in news.items():
-            lines.append(f"{url}: [")
-            for it in items:
-                title = it.get("title") or "(без заголовка)"
-                link = it.get("url") or ""
-                pub  = it.get("published") or ""
-                # одна запись — одной строкой
-                lines.append('  {{ "title": "{}", "url": "{}", "published": "{}" }},'.format(
-                    str(title).replace('"', '\\"'),
-                    str(link).replace('"', '\\"'),
-                    str(pub).replace('"', '\\"')
-                ))
-            lines.append("]\n")
-    else:
-        lines.append("(пусто)\n")
-
-    if errors:
-        lines.append("Ошибки:")
-        for u, msg in errors.items():
-            lines.append(f"- {u}: {msg}")
-
-    return "\n".join(lines)
-
 
 # ---------------------------
-# HTML cards renderer
+# HTML non-stream renderer (опционально)
 # ---------------------------
 
 def _format_html_cards(raw_by_src: Dict[str, List[Any]]) -> str:
@@ -290,15 +273,21 @@ def _format_html_cards(raw_by_src: Dict[str, List[Any]]) -> str:
 </style>
     """)
     for src, items in raw_by_src.items():
+        # 1) параллельно вытащим тексты
+        texts = _extract_texts_batch(items, max_workers=12)
+
+        # 2) батч-суммаризация
+        if ru_summarize_many is not None:
+            summaries = ru_summarize_many(texts, max_new_tokens=120, batch_size=8, num_beams=1)
+        else:
+            summaries = [_summarize_text(t) for t in texts]
+
         lines.append('<div class="news-group">')
         lines.append(f'<div class="news-source">{html.escape(src)}</div>')
-        for e in items or []:
+        for e, summary in zip(items, summaries):
             title = _get_entry_title(e)
             link = _get_entry_link(e)
             pub  = _get_entry_published(e)
-            inline = _get_entry_inline_content(e)
-            fulltext = _extract_article_text(link, fallback=inline)
-            summary  = _summarize_text(fulltext) or "(нет текста для суммаризации)"
 
             lines.append('<div class="card">')
             lines.append('<div class="head">')
@@ -312,10 +301,39 @@ def _format_html_cards(raw_by_src: Dict[str, List[Any]]) -> str:
             if pub:
                 lines.append(f'<span class="date">{html.escape(pub)}</span>')
             lines.append('</div>')  # head
-            lines.append(f'<div class="sum">{html.escape(summary)}</div>')
+            lines.append(f'<div class="sum">{html.escape(summary or "(нет текста для суммаризации)")}</div>')
             lines.append('</div>')  # card
         lines.append('</div>')      # news-group
     return "\n".join(lines)
+
+
+# ---------------------------
+# SSE utilities (streaming)
+# ---------------------------
+
+def _sse_pack(event: str, data: dict) -> bytes:
+    return f"event: {event}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n".encode("utf-8")
+
+def _coerce_urls_str(s: str) -> List[str]:
+    parts = [p.strip() for p in s.replace(",", "\n").splitlines()]
+    return [p for p in parts if p]
+
+def _extract_texts_batch(entries: List[Any], max_workers: int = 12) -> List[str]:
+    """I/O-параллелизм: качаем тексты статей потоками. Порядок сохраняем."""
+    texts = ["" for _ in range(len(entries))]
+    with ThreadPoolExecutor(max_workers=max_workers) as ex:
+        futures = {}
+        for i, e in enumerate(entries):
+            link = _get_entry_link(e)
+            inline = _get_entry_inline_content(e)
+            futures[ex.submit(_extract_article_text, link, inline)] = i
+        for fut in as_completed(futures):
+            idx = futures[fut]
+            try:
+                texts[idx] = fut.result()
+            except Exception:
+                texts[idx] = ""
+    return texts
 
 
 # ---------------------------
@@ -329,8 +347,8 @@ def serve_index():
     html_fallback = """
     <!doctype html><meta charset="utf-8">
     <title>News Aggregator</title>
-    <h3>index.html не найден рядом с main.py</h3>
-    <p>Сгенерируйте интерфейс или разместите файл.</p>
+    <h3>templates/index.html не найден рядом с main.py</h3>
+    <p>Разместите файл по пути ./templates/index.html</p>
     """
     return HTMLResponse(html_fallback, status_code=200)
 
@@ -338,50 +356,130 @@ def serve_index():
 def health():
     return {"ok": True}
 
+# JSON и TEXT оставлены для совместимости (front их не использует)
 @app.post("/api/rss")
 def api_rss(payload: RSSLinksRequest) -> Dict[str, Any]:
-    """
-    JSON-вариант (для совместимости).
-    """
     urls = _normalize_urls(list(payload.urls or []))
     news, errors = _fetch_news_dict(urls, payload.latest_n, payload.keywords)
     return {"selected": urls, "news": news, "errors": errors}
 
 @app.post("/api/rss_text", response_class=PlainTextResponse)
 def api_rss_text(payload: RSSLinksRequest) -> PlainTextResponse:
-    """
-    ТЕКСТОВЫЙ вариант: text/plain со «словарём» новостей.
-    """
     urls = _normalize_urls(list(payload.urls or []))
     news, errors = _fetch_news_dict(urls, payload.latest_n, payload.keywords)
-    text = _format_text_dict(news, errors)
+    text_lines: List[str] = []
+    if news:
+        for url, items in news.items():
+            text_lines.append(f"{url}:")
+            for it in items:
+                title = it.get("title") or "(без заголовка)"
+                link = it.get("url") or ""
+                pub  = it.get("published") or ""
+                text_lines.append(f"- {title} [{pub}] {link}")
+            text_lines.append("")
+    if errors:
+        text_lines.append("Ошибки:")
+        for u, msg in errors.items():
+            text_lines.append(f"- {u}: {msg}")
+    text = "\n".join(text_lines) or "(пусто)"
     return PlainTextResponse(text, media_type="text/plain; charset=utf-8")
 
+# Нестримоовый HTML (на всякий случай)
 @app.post("/api/rss_html", response_class=HTMLResponse)
 def api_rss_html(payload: RSSLinksRequest) -> HTMLResponse:
-    """
-    Красивый HTML: заголовок (ссылка), дата, и сжатие через модель.
-    """
     urls = _normalize_urls(list(payload.urls or []))
-
     if not urls:
         return HTMLResponse("<p class='muted'>(не переданы валидные ссылки)</p>", status_code=200)
-
     if parse_websites is None:
         return HTMLResponse("<p class='muted'>rss_parser.parse_websites не импортирован</p>", status_code=200)
-
     try:
         raw = parse_websites(urls, payload.keywords, latest_n=payload.latest_n) or {}
     except Exception as ex:
         return HTMLResponse(f"<p class='muted'>parse error: {html.escape(str(ex))}</p>", status_code=200)
-
-    # Пустые источники не рендерим
     raw = {k: v for k, v in raw.items() if v}
     if not raw:
         return HTMLResponse("<p class='muted'>(нет записей)</p>", status_code=200)
-
     html_block = _format_html_cards(raw)
     return HTMLResponse(html_block, media_type="text/html; charset=utf-8")
+
+# STREAM: события по мере готовности
+@app.get("/api/rss_stream")
+def api_rss_stream(urls: str, latest_n: int = 100, keywords: str = "") -> StreamingResponse:
+    """
+    Стримим карточки по мере готовности.
+    GET-параметры:
+      urls     — строка со ссылками (через запятую или с новой строки)
+      latest_n — лимит на каждую ленту (1..300)
+      keywords — строка ключевых через запятую (опционально)
+    """
+    try:
+        latest_n = max(1, min(int(latest_n), 300))
+    except Exception:
+        latest_n = 100
+
+    url_list = _normalize_urls(_coerce_urls_str(urls or ""))
+    kw_list = [k.strip() for k in (keywords or "").split(",") if k.strip()]
+
+    def event_stream():
+        if not url_list:
+            yield _sse_pack("done", {"ok": False, "error": "no valid urls"})
+            return
+
+        if parse_websites is None:
+            yield _sse_pack("done", {"ok": False, "error": "rss_parser.parse_websites not imported"})
+            return
+
+        try:
+            raw = parse_websites(url_list, kw_list, latest_n=latest_n) or {}
+        except Exception as ex:
+            yield _sse_pack("done", {"ok": False, "error": f"parse error: {ex}"})
+            return
+
+        total = sum(len(v or []) for v in raw.values())
+        yielded = 0
+        yield _sse_pack("start", {"total": total})
+
+        # Обрабатываем по источникам, батчами (быстро и стабильно)
+        batch_size = 8
+        for src, items in raw.items():
+            if not items:
+                continue
+
+            texts = _extract_texts_batch(items, max_workers=12)
+
+            for i in range(0, len(items), batch_size):
+                sub_items = items[i:i+batch_size]
+                sub_texts = texts[i:i+batch_size]
+
+                if ru_summarize_many is not None:
+                    try:
+                        sub_summaries = ru_summarize_many(
+                            sub_texts, max_new_tokens=120, batch_size=batch_size, num_beams=1
+                        )
+                    except Exception:
+                        sub_summaries = [_summarize_text(t) for t in sub_texts]
+                else:
+                    sub_summaries = [_summarize_text(t) for t in sub_texts]
+
+                for entry, summary in zip(sub_items, sub_summaries):
+                    payload = {
+                        "src": src,
+                        "title": _get_entry_title(entry),
+                        "link": _get_entry_link(entry),
+                        "published": _get_entry_published(entry),
+                        "summary": summary or "(нет текста для суммаризации)",
+                        "progress": {"done": yielded + 1, "total": total} if total else None
+                    }
+                    yielded += 1
+                    yield _sse_pack("card", payload)
+
+        yield _sse_pack("done", {"ok": True, "total": total})
+
+    headers = {
+        "Cache-Control": "no-cache",
+        "Connection": "keep-alive",
+    }
+    return StreamingResponse(event_stream(), media_type="text/event-stream", headers=headers)
 
 
 # ---------------------------
