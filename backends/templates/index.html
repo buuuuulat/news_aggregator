@@ -38,17 +38,18 @@
     <p class="hint">Вставьте RSS-ссылки (по одной в строке или через запятую). Выберите формат «Текст», чтобы получить словарь текстом.</p>
 
     <textarea id="rssInput" placeholder="https://lenta.ru/rss/news
-https://ria.ru/export/rss2/archive/index.xml"></textarea>
+https://ria.ru/export/rss2/archive/index.xml">https://lenta.ru/rss/news
+https://ria.ru/export/rss2/archive/index.xml</textarea>
 
     <div class="row">
       <div>
         <label>Сколько брать на ленту:
-          <input id="latestN" type="number" min="1" max="100" value="10" />
+          <input id="latestN" type="number" min="1" max="100" value="100" />
         </label>
       </div>
       <div>
         <label>Ключевые слова (опц., через запятую):
-          <input id="keywords" type="text" placeholder="economy, tech" />
+          <input id="keywords" type="text" placeholder="Экономика, наука", value="Россия, экономика, наука" />
         </label>
       </div>
     </div>
@@ -66,7 +67,7 @@ https://ria.ru/export/rss2/archive/index.xml"></textarea>
     </div>
 
     <div class="footer">
-      Подсказка: JSON-результат доступен в <code>window.NEWS_DICT</code>. Для «Текст» — просто копируй из блока выше.
+        <br><br>🤗
     </div>
   </div>
 
