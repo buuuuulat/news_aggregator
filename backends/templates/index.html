@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>News Summarizer</title>
+  <title>Новости из RSS — краткие карточки</title>
   <style>
     :root { color-scheme: light dark; }
     body { font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif; margin: 0; }
@@ -11,7 +11,7 @@
     h1 { margin: 0 0 8px 0; font-size: 1.6rem; }
     p.hint { margin: 0 0 16px 0; color: #888; }
 
-    textarea, input[type="number"], input[type="text"] {
+    textarea, input[type="number"], input[type="text"], input[type="password"], input[type="email"] {
       width: 100%; box-sizing: border-box; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
       padding: 10px; border-radius: 10px; border: 1px solid #6663;
       background: transparent; outline: none;
@@ -55,12 +55,40 @@
       animation: spin 0.9s linear infinite;
     }
     @keyframes spin { to { transform: rotate(360deg); } }
+
+    /* Блок авторизации */
+    .auth { margin: 14px 0 18px; border:1px solid #6663; border-radius:12px; padding:12px; }
+    .auth a { color: #4f46e5; text-decoration: none; font-weight:600; }
+    .auth a:hover { text-decoration: underline; }
+    .muted { color: #888; }
+    .ok { color: #059669; }
+    .err { color: #dc2626; }
+    .small { font-size:.9em; opacity:.8; }
+    .userbar { display:flex; justify-content:space-between; align-items:center; gap:10px; }
+    .userbar .who { font-weight:600; }
   </style>
 </head>
 <body>
   <div class="wrap">
-    <h1>News Summarizer</h1>
-    <p class="hint">Вставьте RSS-ссылки / TG-каналы (по одной в строке или через запятую). Будут показаны заголовок-ссылка, дата и краткое резюме.</p>
+    <h1>Новости из RSS — краткие карточки</h1>
+    <p class="hint">Вставьте RSS-ссылки (по одной в строке или через запятую). Будут показаны заголовок-ссылка, дата и краткое резюме.</p>
+
+    <!-- Блок авторизации -->
+    <div class="auth" id="authBox">
+      <div id="authState" class="muted">Проверяю вход…</div>
+      <div id="authHint" class="small" style="display:none; margin-top:10px">
+        Для работы сервиса <a href="/auth">войдите или зарегистрируйтесь</a>.
+      </div>
+      <div id="userBar" class="userbar" style="display:none; margin-top:10px">
+        <div>
+          <span class="who" id="who"></span>
+          <span class="small muted">в системе</span>
+        </div>
+        <div class="actions">
+          <button id="btnLogout" style="background:#6b7280">Выйти</button>
+        </div>
+      </div>
+    </div>
 
     <textarea id="rssInput" placeholder="https://lenta.ru/rss/news
 https://ria.ru/export/rss2/archive/index.xml">https://lenta.ru/rss/news
@@ -160,75 +188,120 @@ https://ria.ru/export/rss2/archive/index.xml</textarea>
       return document.getElementById(id);
     }
 
+    async function whoami() {
+      const state = document.getElementById('authState');
+      const hint = document.getElementById('authHint');
+      const userBar = document.getElementById('userBar');
+      try {
+        const r = await fetch('/auth/me', { credentials: 'include' });
+        if (!r.ok) throw new Error('not ok');
+        const me = await r.json();
+        if (me && me.username) {
+          state.innerHTML = `<span class="ok">Вы вошли как ${me.username}</span>`;
+          if (hint) hint.style.display = 'none';
+          if (userBar) userBar.style.display = 'flex';
+          const who = document.getElementById('who');
+          if (who) who.textContent = me.username;
+          return true;
+        }
+      } catch {}
+      state.innerHTML = `<span class="muted">Вы не авторизованы</span>`;
+      if (hint) hint.style.display = 'block';
+      if (userBar) userBar.style.display = 'none';
+      const who = document.getElementById('who');
+      if (who) who.textContent = '';
+      return false;
+    }
+
+    async function doLogout() {
+      try {
+        await fetch('/auth/logout', { method:'POST', credentials: 'include' });
+      } catch {}
+      await whoami();
+    }
+
     function startStream() {
-      const input = document.getElementById('rssInput').value;
-      const latestN = Number(document.getElementById('latestN').value) || 100;
-      const keywords = (document.getElementById('keywords').value || '')
-        .split(',').map(s => s.trim()).filter(Boolean).join(',');
-
-      if (es) { es.close(); es = null; }
-      setBusy(true);
       const box = document.getElementById('outBox');
-      box.innerHTML = ""; // очистка
+      // Проверка авторизации перед запуском потока
+      fetch('/auth/me', { credentials: 'include' })
+        .then(r => r.ok ? r.json() : Promise.reject())
+        .then(me => {
+          if (!me || !me.username) throw new Error('not authed');
+          const input = document.getElementById('rssInput').value;
+          const latestN = Number(document.getElementById('latestN').value) || 100;
+          const keywords = (document.getElementById('keywords').value || '')
+            .split(',').map(s => s.trim()).filter(Boolean).join(',');
 
-      const params = new URLSearchParams({
-        urls: input,          // допускаются переносы строк
-        latest_n: String(latestN),
-        keywords
-      });
-      const url = `/api/rss_stream?${params.toString()}`;
+          if (es) { es.close(); es = null; }
+          setBusy(true);
+          box.innerHTML = ""; // очистка
 
-      es = new EventSource(url);
+          const params = new URLSearchParams({
+            urls: input,          // допускаются переносы строк
+            latest_n: String(latestN),
+            keywords
+          });
+          const url = `/api/rss_stream?${params.toString()}`;
 
-      es.addEventListener('start', (e) => {
-        const data = JSON.parse(e.data);
-        const total = data.total || 0;
-        if (total === 0) {
-          box.innerHTML = `<div class="muted">Нет записей по фильтрам.</div>`;
-        } else {
-          box.innerHTML = `
-            <div class="loading">
-              <div class="spinner" aria-hidden="true"></div>
-              <div>Нашли ${total} записей. Начинаю суммаризацию…</div>
-            </div>
-          `;
-        }
-      });
+          es = new EventSource(url, { withCredentials: true });
 
-      es.addEventListener('card', (e) => {
-        const data = JSON.parse(e.data);
-        if (box.querySelector('.loading')) box.innerHTML = "";
+          es.addEventListener('start', (e) => {
+            const data = JSON.parse(e.data);
+            const total = data.total || 0;
+            if (total === 0) {
+              box.innerHTML = `<div class="muted">Нет записей по фильтрам.</div>`;
+            } else {
+              box.innerHTML = `
+                <div class="loading">
+                  <div class="spinner" aria-hidden="true"></div>
+                  <div>Нашли ${total} записей. Начинаю суммаризацию…</div>
+                </div>
+              `;
+            }
+          });
 
-        const group = appendGroupIfMissing(data.src || "Источник");
-        group.insertAdjacentHTML('beforeend', buildCardHTML(data));
+          es.addEventListener('card', (e) => {
+            const data = JSON.parse(e.data);
+            if (box.querySelector('.loading')) box.innerHTML = "";
 
-        if (data.progress) {
-          const { done, total } = data.progress;
-          document.title = `(${done}/${total}) Новости из RSS — краткие карточки`;
-        }
-      });
+            const group = appendGroupIfMissing(data.src || "Источник");
+            group.insertAdjacentHTML('beforeend', buildCardHTML(data));
 
-      es.addEventListener('done', (e) => {
-        const data = JSON.parse(e.data || "{}");
-        setBusy(false);
-        if (!data.ok) {
+            if (data.progress) {
+              const { done, total } = data.progress;
+              document.title = `(${done}/${total}) Новости из RSS — краткие карточки`;
+            }
+          });
+
+          es.addEventListener('done', (e) => {
+            const data = JSON.parse(e.data || "{}");
+            setBusy(false);
+            if (!data.ok) {
+              box.innerHTML = `<div class="loading" style="border-color:#e11d48;color:#e11d48">
+                <div class="spinner" style="border-color:#fca5a5;border-top-color:#e11d48"></div>
+                <div>Ошибка: ${data.error || "unknown"}</div>
+              </div>`;
+            }
+            if (es) { es.close(); es = null; }
+            document.title = `Новости из RSS — краткие карточки`;
+          });
+
+          es.onerror = (evt) => {
+            setBusy(false, "");
+            if (es) { es.close(); es = null; }
+            // Если 401 — подсказка пользователю
+            box.insertAdjacentHTML('beforeend', `<div class="loading" style="border-color:#e11d48;color:#e11d48">
+              <div class="spinner" style="border-color:#fca5a5;border-top-color:#e11d48"></div>
+              <div>Ошибка соединения (возможно, требуется <a href="/auth">войти</a>)</div>
+            </div>`);
+          };
+        })
+        .catch(() => {
           box.innerHTML = `<div class="loading" style="border-color:#e11d48;color:#e11d48">
             <div class="spinner" style="border-color:#fca5a5;border-top-color:#e11d48"></div>
-            <div>Ошибка: ${data.error || "unknown"}</div>
+            <div>Вы не авторизованы: перейдите на <a href="/auth">страницу входа</a>, затем перезапустите загрузку</div>
           </div>`;
-        }
-        if (es) { es.close(); es = null; }
-        document.title = `Новости из RSS — краткие карточки`;
-      });
-
-      es.onerror = () => {
-        setBusy(false, "");
-        if (es) { es.close(); es = null; }
-        box.insertAdjacentHTML('beforeend', `<div class="loading" style="border-color:#e11d48;color:#e11d48">
-          <div class="spinner" style="border-color:#fca5a5;border-top-color:#e11d48"></div>
-          <div>Ошибка соединения</div>
-        </div>`);
-      };
+        });
     }
 
     function copyOut() {
@@ -250,13 +323,15 @@ https://ria.ru/export/rss2/archive/index.xml</textarea>
     document.getElementById('btnCopy').addEventListener('click', copyOut);
     document.getElementById('btnClear').addEventListener('click', clearOut);
 
+    document.getElementById('btnLogout').addEventListener('click', doLogout);
+
     // Ctrl/Cmd+Enter — загрузить
     window.addEventListener('keydown', (e) => {
       if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') startStream();
     });
 
-    // Можно автозапустить на загрузке:
-    // window.addEventListener('DOMContentLoaded', startStream);
+    // Инициализация
+    whoami();
   </script>
 </body>
 </html>

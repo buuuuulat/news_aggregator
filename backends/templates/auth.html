@@ -1,0 +1,133 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Вход в систему • News Aggregator</title>
+  <style>
+    :root { color-scheme: light dark; }
+    body {
+      font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
+      margin: 0;
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      background: radial-gradient(circle at top, #1e1b4b 0%, #0f172a 55%, #020617 100%);
+      color: #e5e7eb;
+    }
+    .card {
+      width: min(420px, 92vw);
+      background: rgba(15, 23, 42, 0.92);
+      border-radius: 16px;
+      padding: 28px;
+      border: 1px solid rgba(99, 102, 241, 0.25);
+      box-shadow: 0 24px 50px rgba(15, 23, 42, 0.55);
+    }
+    h1 { margin: 0 0 4px 0; font-size: 1.6rem; color: #f9fafb; }
+    p { margin: 0 0 18px 0; color: #cbd5f5; }
+    label { display: block; margin-bottom: 14px; font-weight: 600; color: #e2e8f0; }
+    input {
+      width: 100%;
+      box-sizing: border-box;
+      border: 1px solid rgba(99, 102, 241, 0.4);
+      border-radius: 12px;
+      padding: 12px;
+      font-size: 1rem;
+      font-family: inherit;
+      background: rgba(30, 41, 59, 0.8);
+      outline: none;
+      color: #f8fafc;
+    }
+    input:focus {
+      border-color: #4f46e5;
+      box-shadow: 0 0 0 3px rgba(79, 70, 229, 0.3);
+    }
+    .actions {
+      display: flex;
+      gap: 12px;
+      flex-wrap: wrap;
+      margin-top: 18px;
+    }
+    button {
+      flex: 1 1 140px;
+      border: none;
+      border-radius: 12px;
+      padding: 12px 16px;
+      font-size: 1rem;
+      font-weight: 600;
+      cursor: pointer;
+      color: #fff;
+      box-shadow: 0 12px 28px rgba(79, 70, 229, 0.32);
+      transition: transform 0.1s ease, box-shadow 0.1s ease;
+    }
+    #btnLogin { background: #4f46e5; }
+    #btnRegister { background: #10b981; box-shadow: 0 12px 28px rgba(16, 185, 129, 0.28); }
+    button:active { transform: translateY(1px); box-shadow: none; }
+    .muted { color: #94a3b8; font-size: 0.95rem; margin-top: 18px; }
+    .muted a { color: #a5b4fc; text-decoration: none; font-weight: 600; }
+    .muted a:hover { text-decoration: underline; }
+    #authMsg { margin-top: 14px; min-height: 1.4em; font-size: 0.95rem; }
+    .ok { color: #34d399; }
+    .err { color: #f87171; }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <h1>Вход в систему</h1>
+    <p>Введите почту и пароль</p>
+    <label>
+      Логин
+      <input id="authLogin" type="text" placeholder="user@example.com" autocomplete="username" />
+    </label>
+    <label>
+      Пароль
+      <input id="authPassword" type="password" placeholder="••••••••" autocomplete="current-password" />
+    </label>
+    <div class="actions">
+      <button id="btnLogin" type="button">Войти</button>
+      <button id="btnRegister" type="button">Зарегистрироваться</button>
+    </div>
+    <div id="authMsg"></div>
+    <div class="muted">
+      Уже вошли? <a href="/">Перейти к новостям</a>
+    </div>
+  </div>
+
+  <script>
+    async function send(kind) {
+      const login = document.getElementById('authLogin').value.trim();
+      const pass = document.getElementById('authPassword').value;
+      const msg = document.getElementById('authMsg');
+      msg.textContent = '';
+      if (!login || !pass) {
+        msg.innerHTML = '<span class="err">Введите логин и пароль</span>';
+        return;
+      }
+      try {
+        const r = await fetch(`/auth/${kind}`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          credentials: 'include',
+          body: JSON.stringify({ username: login, password: pass })
+        });
+        const data = await r.json().catch(() => ({}));
+        if (!r.ok) throw new Error(data && data.detail ? data.detail : 'Ошибка авторизации');
+        msg.innerHTML = `<span class="ok">${kind === 'login' ? 'Успешный вход' : 'Регистрация выполнена'}</span>`;
+        setTimeout(() => { window.location.href = '/'; }, 600);
+      } catch (e) {
+        msg.innerHTML = `<span class="err">${e.message}</span>`;
+      }
+    }
+
+    document.getElementById('btnLogin').addEventListener('click', () => send('login'));
+    document.getElementById('btnRegister').addEventListener('click', () => send('register'));
+    document.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        send('login');
+      }
+    });
+  </script>
+</body>
+</html>
