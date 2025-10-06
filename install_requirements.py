@@ -1,29 +1,28 @@
+# /news_aggregator/install_requirements.py
 import subprocess
 import sys
 
-REQUIREMENTS = [
-    "fastapi[standard]",
-    "requests",
-    "feedparser",
-    "beautifulsoup4",
-    "lxml",
-    "trafilatura",
-    "torch",
-    "transformers",
-    "sentencepiece",
-    "safetensors",
-    "accelerate",
+REQ = [
+    # базовое веб-приложение
+    "fastapi>=0.110",
+    "uvicorn[standard]>=0.29",
+    "jinja2>=3.1",
+    "itsdangerous>=2.1",
+    "python-multipart>=0.0.9",
+    "httpx>=0.27",
+    # RSS и обработка
+    "feedparser>=6.0.11",
+    "beautifulsoup4>=4.12",
+    # Telegram-бот
+    "aiogram>=3.6.0",
+    "python-dotenv>=1.0.1",
 ]
 
-def ensure_packages():
-    for pkg in REQUIREMENTS:
-        name = pkg.split("[")[0]
-        try:
-            __import__(name)
-        except ImportError:
-            print(f"⚙️ Installing missing package: {pkg}")
-            subprocess.check_call([sys.executable, "-m", "pip", "install", "--upgrade", pkg])
+def pip_install(pkg: str):
+    subprocess.check_call([sys.executable, "-m", "pip", "install", pkg])
 
 if __name__ == "__main__":
-    ensure_packages()
-    print("✅ All required packages are installed or already up-to-date.")
+    for pkg in REQ:
+        print(f"Installing {pkg} ...")
+        pip_install(pkg)
+    print("All requirements installed.")

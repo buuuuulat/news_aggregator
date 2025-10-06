@@ -1,20 +1,3 @@
-# -*- coding: utf-8 -*-
-"""
-FastAPI backend for the RSS news aggregator.
-Добавлена минимальная авторизация пользователей через cookie-сессию.
-Важно: логика приложения (парсинг RSS, SSE-стрим и суммаризация) не менялась.
-Мы лишь:
-  • ввели /auth/register, /auth/login, /auth/me, /auth/logout
-  • добавили middleware, которое требует авторизацию для /api/rss_stream
-  • НЕ трогали summatizer/model.py и backends/rss_parser.py
-
-Авторизация "минимальная":
-  - Пользователи хранятся в памяти процесса (без БД), формат {username: {salt, pwd_hash}}
-  - Пароли хэшируются (sha256 + индивидуальная соль).
-  - Сессии — простые случайные токены в памяти процесса (cookie 'session').
-  - Для продакшена потребуется постоянное хранилище и защищённые cookie (Secure/HTTPS).
-"""
-
 from __future__ import annotations
 
 import hashlib
@@ -51,20 +34,13 @@ except Exception:  # noqa: PIE786 - fallback
     ru_summarize = None  # type: ignore[assignment]
     ru_summarize_many = None  # type: ignore[assignment]
 
-# ВАЖНО: мы не меняем ваш парсер.
-# Он должен экспортировать функцию-обработчик SSE под тем же URL (/api/rss_stream),
-# либо предоставлять функцию/генератор, который мы вызываем ниже.
-# Ниже мы просто импортируем и проксируем запрос в исходную реализацию.
 try:
-    # Вариант А: у вас есть готовый ASGI-роутер/эндпоинт внутри файла.
-    # Тогда этот импорт обеспечить не нужно — мы оставляем ваш маршрут как есть.
     from . import rss_parser  # type: ignore
 except Exception:  # pragma: no cover
     rss_parser = None  # на случай, если среда импорта временно недоступна
 
 app = FastAPI(title="News Aggregator (with minimal auth)")
 
-# Если у вас был CORS — сохраняем «как было» или включаем «минимально безопасно».
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],  # при необходимости сузьте домены
@@ -73,9 +49,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# --------------------------
 # Память процесса: пользователи и сессии
-# --------------------------
 _USERS: dict[str, dict[str, str]] = {}
 _SESSIONS: dict[str, dict[str, str | int]] = {}  # token -> {"username":..., "created_at":...}
 
