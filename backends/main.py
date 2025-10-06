@@ -1,20 +1,3 @@
-# -*- coding: utf-8 -*-
-"""
-FastAPI backend for the RSS news aggregator.
-Добавлена минимальная авторизация пользователей через cookie-сессию.
-Важно: логика приложения (парсинг RSS, SSE-стрим и суммаризация) не менялась.
-Мы лишь:
-  • ввели /auth/register, /auth/login, /auth/me, /auth/logout
-  • добавили middleware, которое требует авторизацию для /api/rss_stream
-  • НЕ трогали summatizer/model.py и backends/rss_parser.py
-
-Авторизация "минимальная":
-  - Пользователи хранятся в памяти процесса (без БД), формат {username: {salt, pwd_hash}}
-  - Пароли хэшируются (sha256 + индивидуальная соль).
-  - Сессии — простые случайные токены в памяти процесса (cookie 'session').
-  - Для продакшена потребуется постоянное хранилище и защищённые cookie (Secure/HTTPS).
-"""
-
 from __future__ import annotations
 
 import hashlib
@@ -36,54 +19,45 @@ from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
-try:  # html cleanup для summary, если есть bs4
+try:
     from bs4 import BeautifulSoup  # type: ignore
-except Exception:  # pragma: no cover - необязательная зависимость
+except Exception:
     BeautifulSoup = None  # type: ignore[assignment]
 
-# Попытка подключить summarize-модель из ../summarizer/model.py
 SUMM_DIR = Path(__file__).resolve().parents[1] / "summarizer"
 if str(SUMM_DIR) not in sys.path:
     sys.path.append(str(SUMM_DIR))
-try:  # pragma: no cover - зависимости могут отсутствовать в окружении
+try:
     from model import summarize as ru_summarize, summarize_many as ru_summarize_many  # type: ignore
-except Exception:  # noqa: PIE786 - fallback
+except Exception:
     ru_summarize = None  # type: ignore[assignment]
     ru_summarize_many = None  # type: ignore[assignment]
 
-# ВАЖНО: мы не меняем ваш парсер.
-# Он должен экспортировать функцию-обработчик SSE под тем же URL (/api/rss_stream),
-# либо предоставлять функцию/генератор, который мы вызываем ниже.
-# Ниже мы просто импортируем и проксируем запрос в исходную реализацию.
 try:
-    # Вариант А: у вас есть готовый ASGI-роутер/эндпоинт внутри файла.
-    # Тогда этот импорт обеспечить не нужно — мы оставляем ваш маршрут как есть.
     from . import rss_parser  # type: ignore
-except Exception:  # pragma: no cover
-    rss_parser = None  # на случай, если среда импорта временно недоступна
+except Exception:
+    rss_parser = None
 
 app = FastAPI(title="News Aggregator (with minimal auth)")
 
-# Если у вас был CORS — сохраняем «как было» или включаем «минимально безопасно».
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # при необходимости сузьте домены
+    allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# --------------------------
-# Память процесса: пользователи и сессии
-# --------------------------
 _USERS: dict[str, dict[str, str]] = {}
-_SESSIONS: dict[str, dict[str, str | int]] = {}  # token -> {"username":..., "created_at":...}
+_SESSIONS: dict[str, dict[str, str | int]] = {}
 
 SESSION_COOKIE = "session"
-SESSION_TTL_SECONDS: Optional[int] = None  # можно выставить, например, 7*24*3600
+SESSION_TTL_SECONDS: Optional[int] = None
+
 
 def _hash_password(password: str, salt: str) -> str:
     return hashlib.sha256((salt + ":" + password).encode("utf-8")).hexdigest()
+
 
 def _create_user(username: str, password: str) -> None:
     if username in _USERS:
@@ -92,16 +66,19 @@ def _create_user(username: str, password: str) -> None:
     pwd_hash = _hash_password(password, salt)
     _USERS[username] = {"salt": salt, "pwd_hash": pwd_hash}
 
+
 def _verify_user(username: str, password: str) -> bool:
     u = _USERS.get(username)
     if not u:
         return False
     return _hash_password(password, u["salt"]) == u["pwd_hash"]
 
+
 def _new_session(username: str) -> str:
     token = secrets.token_urlsafe(32)
     _SESSIONS[token] = {"username": username, "created_at": int(time.time())}
     return token
+
 
 def _get_username_by_session(token: Optional[str]) -> Optional[str]:
     if not token:
@@ -111,10 +88,10 @@ def _get_username_by_session(token: Optional[str]) -> Optional[str]:
         return None
     if SESSION_TTL_SECONDS:
         if int(time.time()) - int(sess.get("created_at", 0)) > SESSION_TTL_SECONDS:
-            # срок истёк
             _SESSIONS.pop(token, None)
             return None
     return str(sess.get("username"))
+
 
 def _drop_session(token: Optional[str]) -> None:
     if token:
@@ -139,7 +116,6 @@ def _normalize_urls(urls: List[str]) -> List[str]:
         parsed = urlparse(candidate)
         if parsed.netloc:
             normalized.append(candidate)
-    # deduplicate c сохранением порядка
     seen: Dict[str, None] = {}
     for url in normalized:
         if url not in seen:
@@ -180,7 +156,7 @@ def _get_entry_inline_content(entry: Any) -> str:
             if isinstance(blocks, list):
                 try:
                     return " \n".join(str(block.get("value", "")) for block in blocks if isinstance(block, dict))
-                except Exception:  # pragma: no cover - предохранитель
+                except Exception:
                     pass
     return ""
 
@@ -205,24 +181,15 @@ async def _error_stream(message: str):
 def _extract_article_text(url: str, fallback: str = "") -> str:
     if not url:
         return fallback
-
-    # 1) Попытка через trafilatura
     try:
         import trafilatura  # type: ignore
-
         downloaded = trafilatura.fetch_url(url)
         if downloaded:
-            extracted = trafilatura.extract(
-                downloaded,
-                include_comments=False,
-                include_images=False,
-            )
+            extracted = trafilatura.extract(downloaded, include_comments=False, include_images=False)
             if extracted:
                 return extracted
-    except Exception:  # pragma: no cover - опциональная зависимость
+    except Exception:
         pass
-
-    # 2) requests + BeautifulSoup
     try:
         headers = {"User-Agent": "Mozilla/5.0"}
         resp = requests.get(url, timeout=10, headers=headers)
@@ -236,9 +203,8 @@ def _extract_article_text(url: str, fallback: str = "") -> str:
                 text = "\n".join(p for p in paragraphs if p)
                 if text:
                     return text
-    except Exception:  # pragma: no cover
+    except Exception:
         pass
-
     return fallback
 
 
@@ -252,10 +218,8 @@ def _summarize_text(text: str) -> str:
                 joined = "\n".join(p for p in parts if p).strip()
                 if joined:
                     return joined
-    except Exception:  # pragma: no cover
+    except Exception:
         pass
-
-    # Fallback: первые 2–3 предложения
     sentences = re.split(r"(?<=[.!?])\s+", text.strip())
     return " ".join(sentences[:3]).strip()
 
@@ -272,39 +236,32 @@ def _extract_texts_batch(entries: List[Any], max_workers: int = 12) -> List[str]
             idx = futures[fut]
             try:
                 texts[idx] = fut.result() or ""
-            except Exception:  # pragma: no cover
+            except Exception:
                 texts[idx] = ""
     return texts
 
-# --------------------------
-# Схемы запросов/ответов
-# --------------------------
+
 class AuthPayload(BaseModel):
     username: str = Field(..., min_length=1, max_length=200)
     password: str = Field(..., min_length=1, max_length=500)
 
+
 class WhoAmI(BaseModel):
     username: str
 
-# --------------------------
-# Middleware: защита /api/rss_stream
-# --------------------------
+
 @app.middleware("http")
 async def auth_gate_for_rss_stream(request: Request, call_next):
-    # Не меняем логику ваших маршрутов; просто требуем авторизацию для конкретного эндпоинта.
     if request.url.path.startswith("/api/rss_stream"):
         token = request.cookies.get(SESSION_COOKIE)
         user = _get_username_by_session(token)
         if not user:
             return JSONResponse({"detail": "Unauthorized"}, status_code=401)
-        # можно пробросить имя пользователя вниз по цепочке, если нужно:
         request.state.username = user  # type: ignore[attr-defined]
     response = await call_next(request)
     return response
 
-# --------------------------
-# Auth endpoints
-# --------------------------
+
 @app.post("/auth/register", response_model=WhoAmI)
 def auth_register(payload: AuthPayload, response: Response):
     username = payload.username.strip()
@@ -315,16 +272,16 @@ def auth_register(payload: AuthPayload, response: Response):
     except ValueError as e:
         raise HTTPException(409, str(e))
     token = _new_session(username)
-    # Простейшая cookie-сессия
     response.set_cookie(
         key=SESSION_COOKIE,
         value=token,
         httponly=True,
         samesite="lax",
-        secure=False,  # для HTTPS выставьте True
+        secure=False,
         max_age=SESSION_TTL_SECONDS,
     )
     return {"username": username}
+
 
 @app.post("/auth/login", response_model=WhoAmI)
 def auth_login(payload: AuthPayload, response: Response):
@@ -342,6 +299,7 @@ def auth_login(payload: AuthPayload, response: Response):
     )
     return {"username": username}
 
+
 @app.get("/auth/me", response_model=WhoAmI)
 def auth_me(request: Request):
     token = request.cookies.get(SESSION_COOKIE)
@@ -350,6 +308,7 @@ def auth_me(request: Request):
         raise HTTPException(401, "Не авторизован")
     return {"username": username}
 
+
 @app.post("/auth/logout")
 def auth_logout(response: Response, request: Request):
     token = request.cookies.get(SESSION_COOKIE)
@@ -357,21 +316,13 @@ def auth_logout(response: Response, request: Request):
     response.delete_cookie(SESSION_COOKIE)
     return {"ok": True}
 
-# --------------------------
-# Проксирование существующего SSE-эндпоинта (если он у вас объявлен здесь же)
-# --------------------------
-# Если ваш /api/rss_stream объявлен в backends/rss_parser.py, ничего дополнительно делать не нужно.
-# Middleware выше уже будет его защищать.
-# Если же он был объявлен прямо в этом файле — оставьте ваш исходный код ниже без изменений.
-# --------------------------
-
 
 @app.get("/api/rss_stream")
 def api_rss_stream(
     request: Request,
-    urls: str = Query("", description="Список RSS-адресов через запятую или перевод строки"),
-    latest_n: int = Query(100, ge=1, le=300, description="Количество статей на источник"),
-    keywords: str = Query("", description="Ключевые слова через запятую"),
+    urls: str = Query("", description="Список RSS-адресов"),
+    latest_n: int = Query(100, ge=1, le=300),
+    keywords: str = Query("", description="Ключевые слова"),
 ):
     if rss_parser is None or not hasattr(rss_parser, "parse_websites"):
         return StreamingResponse(_error_stream("RSS парсер не сконфигурирован"), media_type="text/event-stream")
@@ -392,7 +343,7 @@ def api_rss_stream(
 
         try:
             parsed = rss_parser.parse_websites(url_list, keyword_list, latest_n=latest_n) or {}
-        except Exception as exc:  # pragma: no cover - сеть/IO
+        except Exception as exc:
             yield _sse_event("start", {"total": 0})
             yield _sse_event("done", {"ok": False, "error": f"parse error: {exc}"})
             return
@@ -401,7 +352,7 @@ def api_rss_stream(
         yield _sse_event("start", {"total": total})
 
         if total == 0:
-            yield _sse_event("done", {"ok": True, "message": "Нет записей по выбранным источникам"})
+            yield _sse_event("done", {"ok": True, "message": "Нет записей"})
             return
 
         batch_size = 8
@@ -425,7 +376,7 @@ def api_rss_stream(
                             batch_size=len(chunk_texts),
                             num_beams=1,
                         )
-                    except Exception:  # pragma: no cover - падение модели
+                    except Exception:
                         chunk_summaries = [_summarize_text(text) for text in chunk_texts]
                 else:
                     chunk_summaries = [_summarize_text(text) for text in chunk_texts]
@@ -445,16 +396,12 @@ def api_rss_stream(
 
         yield _sse_event("done", {"ok": True, "total": total})
 
-    headers = {
-        "Cache-Control": "no-cache",
-        "Connection": "keep-alive",
-    }
+    headers = {"Cache-Control": "no-cache", "Connection": "keep-alive"}
     return StreamingResponse(event_stream(), media_type="text/event-stream", headers=headers)
 
-# Подсказка: если у вас не было корневого роута, можно отдавать шаблон:
-# (Если у вас уже есть свой обработчик '/', просто удалите этот маршрут.)
+
 try:
-    from fastapi.templating import Jinja2Templates  # используйте ваш шаблонизатор, если он есть
+    from fastapi.templating import Jinja2Templates
     from pathlib import Path
 
     TPL_DIR = Path(__file__).resolve().parents[0] / "templates"
@@ -462,14 +409,12 @@ try:
 
     @app.get("/", response_class=HTMLResponse)
     def index(request: Request):
-        # Рендер вашего index.html из /backends/templates/
         return templates.TemplateResponse("index.html", {"request": request})
 
     @app.get("/auth", response_class=HTMLResponse)
     def auth_page(request: Request):
         return templates.TemplateResponse("auth.html", {"request": request})
 except Exception:
-    # Если у вас другой способ отдачи шаблонов — оставьте как было.
     pass
 
 
