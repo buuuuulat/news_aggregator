@@ -1,4 +1,3 @@
-# /news_aggregator/install_requirements.py
 import subprocess
 import sys
 

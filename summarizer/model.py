@@ -3,7 +3,7 @@ import torch
 import re
 from typing import List
 
-MODEL_NAME = "IlyaGusev/rut5_base_sum_gazeta"  # ~2 GB
+MODEL_NAME = "IlyaGusev/rut5_base_sum_gazeta"
 
 device = (
     "mps" if torch.backends.mps.is_available()
@@ -11,7 +11,6 @@ device = (
     else "cpu"
 )
 
-# Полезно для GPU: меньше памяти / быстрее
 torch_dtype = torch.float16 if device in ("cuda", "mps") else torch.float32
 
 tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME)
@@ -97,7 +96,6 @@ def summarize_many(texts: List[str], max_new_tokens: int = 120, batch_size: int 
     Возвращает список из N строк (по одной суммаризации на статью),
     где каждая строка — склейка суммаризаций её чанков.
     """
-    # Подготовим (idx, chunk) и батчем все чанки сразу
     chunk_map: List[int] = []   # индекс статьи для каждого чанка
     prompts: List[str] = []
     for idx, t in enumerate(texts):

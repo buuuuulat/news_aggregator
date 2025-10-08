@@ -7,7 +7,7 @@ def _norm(s: str) -> str:
 def entry_matches_keywords(entry: dict, keywords: List[str]) -> bool:
     kw = [_norm(k) for k in keywords if k]
     if not kw:
-        return True  # <- если ключевых нет, не фильтруем вовсе
+        return True
 
     fields: List[str] = []
     fields.append(entry.get("title", "") or "")

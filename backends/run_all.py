@@ -1,4 +1,3 @@
-# /news_aggregator/backends/run_all.py
 from __future__ import annotations
 import asyncio
 import os
@@ -6,13 +5,8 @@ from pathlib import Path
 
 import uvicorn
 
-# 1) .env loader — подключаем раньше всего
 try:
     from dotenv import load_dotenv
-    # Ищем .env в нескольких типичных местах:
-    #   <repo_root>/.env
-    #   /news_aggregator/.env
-    #   текущая рабочая директория (по умолчанию)
     candidates = [
         Path(__file__).resolve().parents[2] / ".env",  # repo root (…/ .env)
         Path(__file__).resolve().parents[1] / ".env",  # package root (…/news_aggregator/.env)
@@ -20,18 +14,15 @@ try:
     ]
     for p in candidates:
         if p.exists():
-            load_dotenv(p)  # загружаем первый найденный
+            load_dotenv(p)
             break
     else:
-        load_dotenv()  # fallback: стандартный поиск в CWD
+        load_dotenv()
 except Exception:
-    # безопасно игнорируем — переменные могут прийти из окружения
     pass
 
-# 2) импортируем ваше FastAPI-приложение (НЕ менялось)
-from backends.main import app  # type: ignore
+from backends.main import app
 
-# 3) телеграм-бот
 from backends.telegram_bot import run_bot_forever
 
 HOST = os.getenv("NA_HOST", "0.0.0.0")
