@@ -15,6 +15,7 @@ Users are now able to choose **WebSites** and **Telegram** channels to get compr
 - [Main](#news-aggregator-project-for-hhru-hackathon)
 - [About](#about)
 - [Contents](#contents)
+- [How to use](#how-to-use)
 
 ## How to use
 - ### Run Locally:
