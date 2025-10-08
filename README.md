@@ -1,5 +1,4 @@
 # News Aggregator project for [hh.ru hackathon](https://hackathon.hhtech.ru)
-[Try Demo](icycactus.com)
 
 ---
 
